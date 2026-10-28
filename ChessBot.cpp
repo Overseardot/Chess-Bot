@@ -1008,12 +1008,34 @@ void think(int maxDepth, long long timeMs) {
     memset(historyTable, 0, sizeof(historyTable));
 
     Move bestMove;
+    int previousScore = 0;
     for (int d = 1; d <= maxDepth; d++) {
-        rootBest = Move();
-        int score = search(d, -INF, INF, 0, true);
+        // Aspiration windows reuse the previous iteration's score. Most
+        // iterations finish inside this narrow window, reducing node count.
+        int window = 35;
+        int alpha = (d >= 4) ? max(-INF, previousScore - window) : -INF;
+        int beta  = (d >= 4) ? min( INF, previousScore + window) :  INF;
+        int score = 0;
+
+        while (true) {
+            rootBest = Move();
+            score = search(d, alpha, beta, 0, true);
+            if (stopSearch) break;
+
+            if (score <= alpha && alpha > -INF) {
+                alpha = max(-INF, alpha - window);
+                window *= 2;
+            } else if (score >= beta && beta < INF) {
+                beta = min(INF, beta + window);
+                window *= 2;
+            } else {
+                break;
+            }
+        }
         if (stopSearch) break;
 
-        bestMove  = rootBest;
+        previousScore = score;
+        bestMove = rootBest;
 
         long long ms = elapsedMs();
         cout << "info depth " << d << " score ";
