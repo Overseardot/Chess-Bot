@@ -94,8 +94,8 @@ U64 knightAtt[64], kingAtt[64], pawnAtt[2][64];
 U64 fileMask[8];
 U64 passedMask[2][64];   // squares that must be free of enemy pawns for a passed pawn
 
-const int chess botDr[4]   = {1, -1, 0, 0};
-const int chess botDf[4]   = {0, 0, 1, -1};
+const int rookDr[4]   = {1, -1, 0, 0};
+const int rookDf[4]   = {0, 0, 1, -1};
 const int bishopDr[4] = {1, 1, -1, -1};
 const int bishopDf[4] = {1, -1, 1, -1};
 
@@ -113,7 +113,7 @@ inline U64 slidingAttacks(int sq, U64 occ, const int *dr, const int *df, int n) 
     }
     return att;
 }
-inline U64 chess botAttacks(int sq, U64 occ)   { return slidingAttacks(sq, occ, chess botDr, chess botDf, 4); }
+inline U64 rookAttacks(int sq, U64 occ)   { return slidingAttacks(sq, occ, rookDr, rookDf, 4); }
 inline U64 bishopAttacks(int sq, U64 occ) { return slidingAttacks(sq, occ, bishopDr, bishopDf, 4); }
 
 bool isSquareAttacked(int sq, int by) {
@@ -121,7 +121,7 @@ bool isSquareAttacked(int sq, int by) {
     if (knightAtt[sq]       & byType[by][KNIGHT]) return true;
     if (kingAtt[sq]         & byType[by][KING])   return true;
     if (bishopAttacks(sq, all) & (byType[by][BISHOP] | byType[by][QUEEN])) return true;
-    if (chess botAttacks(sq, all)   & (byType[by][ROOK]   | byType[by][QUEEN])) return true;
+    if (rookAttacks(sq, all)   & (byType[by][ROOK]   | byType[by][QUEEN])) return true;
     return false;
 }
 
@@ -314,14 +314,14 @@ void generateMoves(MoveList &ml, bool capturesOnly) {
         }
     }
 
-    // ---- bishops / chess bots / queens ----
+    // ---- bishops / rooks / queens ----
     for (int pt = BISHOP; pt <= QUEEN; pt++) {
         b = byType[us][pt];
         while (b) {
             int s = poplsb(b);
             U64 att = (pt == BISHOP ? bishopAttacks(s, occ)
-                     : pt == ROOK   ? chess botAttacks(s, occ)
-                     : bishopAttacks(s, occ) | chess botAttacks(s, occ)) & ~ours;
+                     : pt == ROOK   ? rookAttacks(s, occ)
+                     : bishopAttacks(s, occ) | rookAttacks(s, occ)) & ~ours;
             while (att) {
                 int t = poplsb(att);
                 if (!capturesOnly || (theirs & (1ULL << t))) ml.add(s, t);
@@ -416,12 +416,12 @@ void makeMove(Move m) {
         else if (to ==  2) { rf =  0; rt =  3; }
         else if (to == 62) { rf = 63; rt = 61; }
         else               { rf = 56; rt = 59; }
-        int chess bot = mailbox[rf];
+        int rook = mailbox[rf];
         clearBit(byType[us][ROOK], rf); clearBit(byColor[us], rf);
         clearBit(all, rf); mailbox[rf] = -1;
         setBit(byType[us][ROOK], rt); setBit(byColor[us], rt);
-        setBit(all, rt); mailbox[rt] = chess bot;
-        hashKey ^= zPiece[chess bot][rf] ^ zPiece[chess bot][rt];
+        setBit(all, rt); mailbox[rt] = rook;
+        hashKey ^= zPiece[rook][rf] ^ zPiece[rook][rt];
     }
 
     int nc = castling & castleMask[from] & castleMask[to];
@@ -481,11 +481,11 @@ void unmakeMove(Move m) {
         else if (to ==  2) { rf =  0; rt =  3; }
         else if (to == 62) { rf = 63; rt = 61; }
         else               { rf = 56; rt = 59; }
-        int chess bot = mailbox[rt];
+        int rook = mailbox[rt];
         clearBit(byType[us][ROOK], rt); clearBit(byColor[us], rt);
         clearBit(all, rt); mailbox[rt] = -1;
         setBit(byType[us][ROOK], rf); setBit(byColor[us], rf);
-        setBit(all, rf); mailbox[rf] = chess bot;
+        setBit(all, rf); mailbox[rf] = rook;
     }
 
     castling = u.castling;
@@ -582,7 +582,7 @@ static const int bishopEG[64] = {
    -10,  5,  0,  0,  0,  0,  5,-10,
    -20,-10,-10,-10,-10,-10,-10,-20
 };
-static const int chess botMG[64] = {
+static const int rookMG[64] = {
      0,  0,  0,  0,  0,  0,  0,  0,
      5, 10, 10, 10, 10, 10, 10,  5,
     -5,  0,  0,  0,  0,  0,  0, -5,
@@ -592,7 +592,7 @@ static const int chess botMG[64] = {
     -5,  0,  0,  0,  0,  0,  0, -5,
      0,  0,  0,  5,  5,  0,  0,  0
 };
-static const int chess botEG[64] = {
+static const int rookEG[64] = {
      0,  0,  0,  0,  0,  0,  0,  0,
      5, 10, 10, 10, 10, 10, 10,  5,
     -5,  0,  0,  0,  0,  0,  0, -5,
@@ -643,8 +643,8 @@ static const int kingEG[64] = {
    -50,-30,-30,-30,-30,-30,-30,-50
 };
 
-const int *mgPtr[6] = { pawnMG, knightMG, bishopMG, chess botMG, queenMG, kingMG };
-const int *egPtr[6] = { pawnEG, knightEG, bishopEG, chess botEG, queenEG, kingEG };
+const int *mgPtr[6] = { pawnMG, knightMG, bishopMG, rookMG, queenMG, kingMG };
+const int *egPtr[6] = { pawnEG, knightEG, bishopEG, rookEG, queenEG, kingEG };
 const int mgVal[6] = { 100, 320, 330, 500, 900, 0 };
 const int egVal[6] = { 120, 300, 320, 530, 950, 0 };
 
