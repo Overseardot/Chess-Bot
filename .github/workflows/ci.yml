@@ -1,0 +1,21 @@
+name: Chess Bot CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Build engine with warnings enabled
+        run: g++ -O3 -std=c++17 -pthread -Wall -Wextra -Wpedantic ChessBot.cpp -o ChessBot
+      - name: Build perft and hash regression tests
+        run: g++ -O2 -std=c++17 -pthread -Wall -Wextra -Wpedantic tests/ChessBotTests.cpp -o ChessBotTests
+      - name: Run move-generation and hash tests
+        run: ./ChessBotTests
+      - name: Run UCI and interruption tests
+        run: python3 tests/uci_smoke_test.py ./ChessBot
