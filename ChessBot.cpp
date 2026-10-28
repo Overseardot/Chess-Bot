@@ -1,6 +1,6 @@
 // ============================================================
 //  Chess Bot — a single-file UCI chess engine
-//  Compile: g++ -O2 -std=c++17 -pthread engine.cpp -o engine
+//  Compile: g++ -O3 -march=native -std=c++17 -pthread ChessBot.cpp -o ChessBot
 // ============================================================
 #include <algorithm>
 #include <atomic>
@@ -242,7 +242,9 @@ void setFen(const string &fen) {
         while (b) { int s = poplsb(b); hashKey ^= zPiece[p][s]; }
     }
     hashKey ^= zCastle[castling];
-    if (ep >= 0) hashKey ^= zEp[ep & 7];
+    // Match makeMove(): only hash en-passant when a capture is available.
+    if (ep >= 0 && (pawnAtt[side ^ 1][ep] & byType[side][PAWN]))
+        hashKey ^= zEp[ep & 7];
     if (side == BLACK) hashKey ^= zSide;
 
     posCount = 0;
@@ -717,11 +719,21 @@ struct TTEntry {
     uint8_t depth = 0;
     uint8_t flag = 0;   // 0 empty, 1 exact, 2 upper, 3 lower
 };
-const int TT_BITS = 20;
-const int TT_SIZE = 1 << TT_BITS;
+// Power-of-two table size, so a position hashes to one TT slot cheaply.
+// The advertised Hash option is implemented in megabytes.
+size_t TT_SIZE = size_t(1) << 22; // 64 MiB with the current TTEntry layout
 vector<TTEntry> TT;
 
 void clearTT() { fill(TT.begin(), TT.end(), TTEntry()); }
+
+void resizeHash(int megabytes) {
+    megabytes = max(1, min(megabytes, 1024));
+    size_t targetEntries = (size_t(megabytes) * 1024 * 1024) / sizeof(TTEntry);
+    size_t entries = size_t(1) << 16;
+    while ((entries << 1) <= targetEntries) entries <<= 1;
+    TT_SIZE = entries;
+    TT.assign(TT_SIZE, TTEntry{});
+}
 
 uint16_t encodeMove(Move m) {
     return (uint16_t)(m.from | (m.to << 6) | (m.promo << 12));
@@ -899,11 +911,12 @@ int search(int depth, int alpha, int beta, int ply, bool nullOk) {
         pickBest(ml, i);
         Move m = ml.moves[i];
 
+        // Classify before makeMove: afterward mailbox[m.to] contains our piece.
+        bool isQuiet = !(m.flags & FLAG_EP) && mailbox[m.to] < 0 && !m.promo;
+
         makeMove(m);
         if (isSquareAttacked(kingSq[side ^ 1], side)) { unmakeMove(m); continue; }
         moveCount++;
-
-        bool isQuiet = !(m.flags & FLAG_EP) && mailbox[m.to] < 0 && !m.promo;
 
         int score;
         if (moveCount == 1) {
@@ -957,11 +970,14 @@ int search(int depth, int alpha, int beta, int ply, bool nullOk) {
     if (storeScore >  MATE - 1000) storeScore += ply;
     else if (storeScore < -MATE + 1000) storeScore -= ply;
 
-    tte.key   = hashKey;
-    tte.score = storeScore;
-    tte.move  = encodeMove(bestMove);
-    tte.depth = (uint8_t)depth;
-    tte.flag  = (uint8_t)flag;
+    // Preserve a deeper entry when a different position collides in this slot.
+    if (tte.flag == 0 || tte.key == hashKey || depth >= tte.depth) {
+        tte.key   = hashKey;
+        tte.score = storeScore;
+        tte.move  = encodeMove(bestMove);
+        tte.depth = (uint8_t)min(depth, 255);
+        tte.flag  = (uint8_t)flag;
+    }
 
     return bestScore;
 }
@@ -986,15 +1002,12 @@ void think(int maxDepth, long long timeMs) {
     memset(historyTable, 0, sizeof(historyTable));
 
     Move bestMove;
-    int bestScore = 0;
-
     for (int d = 1; d <= maxDepth; d++) {
         rootBest = Move();
         int score = search(d, -INF, INF, 0, true);
         if (stopSearch) break;
 
         bestMove  = rootBest;
-        bestScore = score;
 
         long long ms = elapsedMs();
         cout << "info depth " << d << " score ";
@@ -1039,7 +1052,7 @@ Move parseMove(const string &s) {
 
 // ------------------------- Main -------------------------
 int main() {
-    TT.resize(TT_SIZE);
+    resizeHash(64);
     initTables();
     setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
@@ -1053,12 +1066,26 @@ int main() {
 
         if (token == "uci") {
             cout << "id name Chess Bot" << endl;
-            cout << "id author Engine" << endl;
+            cout << "id author Chess Bot project" << endl;
             cout << "option name Hash type spin default 64 min 1 max 1024" << endl;
             cout << "uciok" << endl;
         }
         else if (token == "isready") {
             cout << "readyok" << endl;
+        }
+        else if (token == "setoption") {
+            string nameWord, optionName, valueWord;
+            ss >> nameWord >> optionName >> valueWord;
+            if (nameWord == "name" && optionName == "Hash" && valueWord == "value") {
+                int mb = 64;
+                if (ss >> mb) {
+                    if (searchThread.joinable()) {
+                        stopSearch = true;
+                        searchThread.join();
+                    }
+                    resizeHash(mb);
+                }
+            }
         }
         else if (token == "ucinewgame") {
             clearTT();
@@ -1110,15 +1137,15 @@ int main() {
             }
 
             long long limit = 0;
-            if (movetime > 0) limit = movetime - 30;
+            if (movetime > 0) limit = max(1, movetime - min(30, movetime / 10));
             else {
                 long long t0 = (side == WHITE) ? wtime : btime;
                 long long inc = (side == WHITE) ? winc  : binc;
                 if (t0 > 0) {
                     int mtg = movestogo ? movestogo : 30;
                     limit = t0 / mtg + inc * 3 / 4;
-                    limit = min(limit, t0 - 50);
-                    limit = max(limit, 10LL);
+                    limit = min(limit, max(1LL, t0 - 50));
+                    limit = max(1LL, limit);
                 }
             }
 
