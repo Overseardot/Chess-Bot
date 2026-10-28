@@ -9,7 +9,6 @@ This reports match results only; it does not claim an Elo estimate from a small 
 import argparse
 import collections
 import os
-import sys
 import chess
 import chess.engine
 
@@ -43,6 +42,7 @@ def main():
             black_idx = 1 - white_idx
             board = chess.Board()
             plies = 0
+            score = None
             while not board.is_game_over(claim_draw=True) and plies < args.max_plies:
                 idx = white_idx if board.turn == chess.WHITE else black_idx
                 result = engines[idx].play(board, chess.engine.Limit(depth=args.depth))
@@ -54,12 +54,8 @@ def main():
                     break
                 board.push(result.move)
                 plies += 1
-            else:
-                # Loop ended normally; adjudicate terminal position or ply cap.
-                outcome = board.outcome(claim_draw=True)
-                score = outcome.result() if outcome else "1/2-1/2"
-                print(f"Game {game_no + 1}: {score} ({plies} plies)")
-            if 'score' not in locals():
+            if score is None:
+                # Adjudicate a terminal position or the configured ply cap.
                 outcome = board.outcome(claim_draw=True)
                 score = outcome.result() if outcome else "1/2-1/2"
                 print(f"Game {game_no + 1}: {score} ({plies} plies)")
@@ -69,7 +65,6 @@ def main():
                 results[names[black_idx] + " wins"] += 1
             else:
                 results["draws"] += 1
-            del score
     finally:
         for engine in engines:
             engine.quit()
