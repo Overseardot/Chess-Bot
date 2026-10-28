@@ -80,6 +80,7 @@ int  undoCount = 0;
 
 U64  posHistory[2048];
 int  posCount = 0;
+int  nullMoveDepth = 0; // nonzero while searching a branch containing a null move
 
 int  castleMask[64];
 
@@ -207,7 +208,7 @@ void setFen(const string &fen) {
     memset(byColor, 0, sizeof(byColor));
     all = 0;
     for (int i = 0; i < 64; i++) mailbox[i] = -1;
-    castling = 0; ep = -1; fifty = 0; undoCount = 0;
+    castling = 0; ep = -1; fifty = 0; undoCount = 0; nullMoveDepth = 0;
 
     istringstream ss(fen);
     string bstr, sstr, cstr, estr;
@@ -376,6 +377,7 @@ void makeMove(Move m) {
     u.hash = hashKey;
 
     int us = side, them = us ^ 1;
+    const bool oldEpHashed = ep >= 0 && (pawnAtt[side ^ 1][ep] & byType[side][PAWN]);
     int from = m.from, to = m.to;
     int pc = mailbox[from];
 
@@ -432,7 +434,7 @@ void makeMove(Move m) {
         castling = nc;
     }
 
-    if (ep >= 0) hashKey ^= zEp[ep & 7];
+    if (oldEpHashed) hashKey ^= zEp[ep & 7];
     ep = -1;
     if (m.flags & FLAG_DOUBLE) {
         int e = (us == WHITE) ? from + 8 : from - 8;
@@ -501,11 +503,13 @@ void makeNullMove() {
     Undo &u = undoStack[undoCount++];
     u.castling = castling; u.ep = ep; u.fifty = fifty; u.hash = hashKey;
     u.captured = -1; u.capSq = -1;
-    if (ep >= 0) hashKey ^= zEp[ep & 7];
+    if (ep >= 0 && (pawnAtt[side ^ 1][ep] & byType[side][PAWN]))
+        hashKey ^= zEp[ep & 7];
     ep = -1;
     fifty++;
     side ^= 1;
     hashKey ^= zSide;
+    ++nullMoveDepth;
     posHistory[posCount++] = hashKey;
 }
 
@@ -514,6 +518,7 @@ void unmakeNullMove() {
     side ^= 1;
     castling = u.castling; ep = u.ep; fifty = u.fifty; hashKey = u.hash;
     posCount--;
+    if (nullMoveDepth > 0) --nullMoveDepth;
 }
 
 bool isLegal(Move m) {
@@ -859,7 +864,7 @@ int search(int depth, int alpha, int beta, int ply, bool nullOk) {
     if (ply >= MAX_PLY - 1) return evaluate();
 
     if (ply > 0) {
-        if (isRepetition() || fifty >= 100) return 0;
+        if (nullMoveDepth == 0 && (isRepetition() || fifty >= 100)) return 0;
         alpha = max(alpha, -MATE + ply);
         beta  = min(beta,   MATE - ply - 1);
         if (alpha >= beta) return alpha;
@@ -1057,6 +1062,12 @@ int main() {
     setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
     thread searchThread;
+    auto stopAndJoin = [&]() {
+        if (searchThread.joinable()) {
+            stopSearch = true;
+            searchThread.join();
+        }
+    };
     string line;
 
     while (getline(cin, line)) {
@@ -1079,19 +1090,18 @@ int main() {
             if (nameWord == "name" && optionName == "Hash" && valueWord == "value") {
                 int mb = 64;
                 if (ss >> mb) {
-                    if (searchThread.joinable()) {
-                        stopSearch = true;
-                        searchThread.join();
-                    }
+                    stopAndJoin();
                     resizeHash(mb);
                 }
             }
         }
         else if (token == "ucinewgame") {
+            stopAndJoin();
             clearTT();
             setFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
         }
         else if (token == "position") {
+            stopAndJoin();
             string sub;
             ss >> sub;
             string fen;
@@ -1118,7 +1128,7 @@ int main() {
             // (kept as is — search only cares about repetitions from here on)
         }
         else if (token == "go") {
-            if (searchThread.joinable()) searchThread.join();
+            stopAndJoin();
 
             int depth = MAX_PLY, movetime = 0;
             long long wtime = 0, btime = 0, winc = 0, binc = 0;
@@ -1153,16 +1163,14 @@ int main() {
             searchThread = thread([depth, limit]() { think(depth, limit); });
         }
         else if (token == "stop") {
-            stopSearch = true;
-            if (searchThread.joinable()) searchThread.join();
+            stopAndJoin();
         }
         else if (token == "quit") {
-            stopSearch = true;
-            if (searchThread.joinable()) searchThread.join();
+            stopAndJoin();
             break;
         }
     }
 
-    if (searchThread.joinable()) searchThread.join();
+    stopAndJoin();
     return 0;
 }
