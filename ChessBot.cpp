@@ -998,7 +998,8 @@ void printScore(int score) {
 }
 
 void think(int maxDepth, long long timeMs) {
-    stopSearch = false;
+    // The command thread clears stopSearch before launching this worker.
+    // Do not reset it here: a stop request can arrive before this thread runs.
     nodes = 0;
     searchStart = chrono::steady_clock::now();
     timeLimitMs = timeMs;
